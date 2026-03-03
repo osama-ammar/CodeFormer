@@ -111,26 +111,35 @@ def tensor2img_fast(tensor, rgb2bgr=True, min_max=(0, 1)):
     return output
 
 
+from PIL import Image
+import io
+
 def imfrombytes(content, flag='color', float32=False):
-    """Read an image from bytes.
-
-    Args:
-        content (bytes): Image bytes got from files or other streams.
-        flag (str): Flags specifying the color type of a loaded image,
-            candidates are `color`, `grayscale` and `unchanged`.
-        float32 (bool): Whether to change to float32., If True, will also norm
-            to [0, 1]. Default: False.
-
-    Returns:
-        ndarray: Loaded image array.
-    """
     img_np = np.frombuffer(content, np.uint8)
+    
+    if img_np.size == 0:
+        print("!!! ERROR: Found a 0-byte file !!!")
+        return None
+
     imread_flags = {'color': cv2.IMREAD_COLOR, 'grayscale': cv2.IMREAD_GRAYSCALE, 'unchanged': cv2.IMREAD_UNCHANGED}
     img = cv2.imdecode(img_np, imread_flags[flag])
+    
+    # IF OPENCV FAILS (Likely AVIF/WebP renamed to JPG)
+    if img is None:
+        try:
+            # Try to load with Pillow as a backup
+            pil_img = Image.open(io.BytesIO(content)).convert('RGB')
+            img = np.array(pil_img)
+            # Convert RGB to BGR (because OpenCV uses BGR)
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            print("Successfully recovered a 'fake' JPG using Pillow backup.")
+        except Exception as e:
+            print(f"!!! CRITICAL: Even Pillow could not read this. Size: {len(content)} bytes. Error: {e}")
+            return None
+
     if float32:
         img = img.astype(np.float32) / 255.
     return img
-
 
 def imwrite(img, file_path, params=None, auto_mkdir=True):
     """Write image to file.

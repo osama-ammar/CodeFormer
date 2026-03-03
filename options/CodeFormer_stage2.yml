@@ -9,8 +9,8 @@ datasets:
   train:
     name: Denoising dataset
     type: PairedImageDataset
-    dataroot_gt: E:\Code_store\CodeFormer\datasets\sample_finetune_data\gt
-    dataroot_lq: E:\Code_store\CodeFormer\datasets\sample_finetune_data\gt
+    dataroot_gt: E:\Code_store\CodeFormer\datasets\sample_finetune_data\lq
+    dataroot_lq: E:\Code_store\CodeFormer\datasets\sample_finetune_data\lq
     filename_tmpl: '{}'
     io_backend:
       type: disk
@@ -32,7 +32,8 @@ datasets:
     downsample_range: [4, 30]
     noise_range: [0, 20]
     jpeg_range: [30, 80]
-
+    use_flip: false
+    use_rot: false
     latent_gt_path: ~ # without pre-calculated latent code
     # latent_gt_path: './experiments/pretrained_models/VQGAN/latent_gt_code1024.pth'
 
@@ -88,6 +89,7 @@ train:
   cross_entropy_loss: true
   entropy_loss_weight: 0.5
   fidelity_weight: 0
+
 
   optim_g:
     type: Adam
