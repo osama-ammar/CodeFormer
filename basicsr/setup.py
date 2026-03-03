@@ -9,7 +9,7 @@ import time
 from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension
 from utils.misc import gpu_is_available
 
-version_file = './basicsr/version.py'
+version_file = 'VERSION'
 
 
 def readme():
@@ -66,7 +66,7 @@ __gitsha__ = '{}'
 version_info = ({})
 """
     sha = get_hash()
-    with open('./basicsr/VERSION', 'r') as f:
+    with open('VERSION', 'r') as f:
         SHORT_VERSION = f.read().strip()
     VERSION_INFO = ', '.join([x if x.isdigit() else f'"{x}"' for x in SHORT_VERSION.split('.')])
 
@@ -137,7 +137,7 @@ if __name__ == '__main__':
     else:
         ext_modules = []
 
-    write_version_py()
+    # write_version_py()
     setup(
         name='basicsr',
         version=get_version(),
