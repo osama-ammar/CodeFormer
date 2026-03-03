@@ -161,7 +161,8 @@ class CodeFormerIdxModel(SRModel):
                 del self.gt
 
             # tentative for out of GPU memory
-            del self.lq
+            if hasattr(self, 'lq'):
+                del self.lq
             del self.output
             torch.cuda.empty_cache()
 

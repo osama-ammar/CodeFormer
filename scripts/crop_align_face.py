@@ -22,11 +22,8 @@ import scipy
 import scipy.ndimage
 import argparse
 from basicsr.utils.download_util import load_file_from_url
+import dlib
 
-try:
-    import dlib
-except ImportError:
-    print('Please install dlib by running:' 'conda install -c conda-forge dlib')
 
 # download model from: http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2
 shape_predictor_url = 'https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/shape_predictor_68_face_landmarks-fbdc2cb8.dat'
@@ -174,7 +171,7 @@ def align_face(filepath, out_path):
                         (quad + 0.5).flatten(), PIL.Image.BILINEAR)
 
     if output_size < transform_size:
-        img = img.resize((output_size, output_size), PIL.Image.ANTIALIAS)
+        img = img.resize((output_size, output_size),PIL.Image.Resampling.LANCZOS)
 
     # Save aligned image.
     # print('saveing: ', out_path)

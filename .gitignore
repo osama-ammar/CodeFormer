@@ -5,15 +5,16 @@ version.py
 
 # ignored files with suffix
 *.html
-# *.png
-# *.jpeg
-# *.jpg
+*.png
+*.jpeg
+*.jpg
 *.pt
 *.gif
 *.pth
 *.dat
 *.zip
-
+*.mp4
+*.txt
 # template
 
 # Byte-compiled / optimized / DLL files

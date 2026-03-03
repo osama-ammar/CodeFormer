@@ -144,49 +144,73 @@ def paired_paths_from_lmdb(folders, keys):
             paths.append(dict([(f'{input_key}_path', lmdb_key), (f'{gt_key}_path', lmdb_key)]))
         return paths
 
-
 def paired_paths_from_meta_info_file(folders, keys, meta_info_file, filename_tmpl):
-    """Generate paired paths from an meta information file.
-
-    Each line in the meta information file contains the image names and
-    image shape (usually for gt), separated by a white space.
-
-    Example of an meta information file:
-    ```
-    0001_s001.png (480,480,3)
-    0001_s002.png (480,480,3)
-    ```
-
-    Args:
-        folders (list[str]): A list of folder path. The order of list should
-            be [input_folder, gt_folder].
-        keys (list[str]): A list of keys identifying folders. The order should
-            be in consistent with folders, e.g., ['lq', 'gt'].
-        meta_info_file (str): Path to the meta information file.
-        filename_tmpl (str): Template for each filename. Note that the
-            template excludes the file extension. Usually the filename_tmpl is
-            for files in the input folder.
-
-    Returns:
-        list[str]: Returned path list.
-    """
-    assert len(folders) == 2, ('The len of folders should be 2 with [input_folder, gt_folder]. '
-                               f'But got {len(folders)}')
-    assert len(keys) == 2, ('The len of keys should be 2 with [input_key, gt_key]. ' f'But got {len(keys)}')
     input_folder, gt_folder = folders
     input_key, gt_key = keys
 
-    with open(meta_info_file, 'r') as fin:
-        gt_names = [line.split(' ')[0] for line in fin]
-
     paths = []
-    for gt_name in gt_names:
-        basename, ext = osp.splitext(osp.basename(gt_name))
-        input_name = f'{filename_tmpl.format(basename)}{ext}'
-        input_path = osp.join(input_folder, input_name)
-        gt_path = osp.join(gt_folder, gt_name)
-        paths.append(dict([(f'{input_key}_path', input_path), (f'{gt_key}_path', gt_path)]))
+    with open(meta_info_file, 'r') as fin:
+        for line in fin:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 1. Split the line into GT and LQ paths
+            parts = line.split(' ')
+            gt_path_from_file = parts[0]
+            lq_path_from_file = parts[1]
+
+            # 2. Join them with the roots (if roots are / or "", they stay absolute)
+            gt_path = osp.join(gt_folder, gt_path_from_file)
+            input_path = osp.join(input_folder, lq_path_from_file)
+
+            paths.append(dict([
+                (f'{input_key}_path', input_path), 
+                (f'{gt_key}_path', gt_path)
+            ]))
     return paths
+# def paired_paths_from_meta_info_file(folders, keys, meta_info_file, filename_tmpl):
+#     """Generate paired paths from an meta information file.
+
+#     Each line in the meta information file contains the image names and
+#     image shape (usually for gt), separated by a white space.
+
+#     Example of an meta information file:
+#     ```
+#     0001_s001.png (480,480,3)
+#     0001_s002.png (480,480,3)
+#     ```
+
+#     Args:
+#         folders (list[str]): A list of folder path. The order of list should
+#             be [input_folder, gt_folder].
+#         keys (list[str]): A list of keys identifying folders. The order should
+#             be in consistent with folders, e.g., ['lq', 'gt'].
+#         meta_info_file (str): Path to the meta information file.
+#         filename_tmpl (str): Template for each filename. Note that the
+#             template excludes the file extension. Usually the filename_tmpl is
+#             for files in the input folder.
+
+#     Returns:
+#         list[str]: Returned path list.
+#     """
+#     assert len(folders) == 2, ('The len of folders should be 2 with [input_folder, gt_folder]. '
+#                                f'But got {len(folders)}')
+#     assert len(keys) == 2, ('The len of keys should be 2 with [input_key, gt_key]. ' f'But got {len(keys)}')
+#     input_folder, gt_folder = folders
+#     input_key, gt_key = keys
+
+#     with open(meta_info_file, 'r') as fin:
+#         gt_names = [line.split(' ')[0] for line in fin]
+
+#     paths = []
+#     for gt_name in gt_names:
+#         basename, ext = osp.splitext(osp.basename(gt_name))
+#         input_name = f'{filename_tmpl.format(basename)}{ext}'
+#         input_path = osp.join(input_folder, input_name)
+#         gt_path = osp.join(gt_folder, gt_name)
+#         paths.append(dict([(f'{input_key}_path', input_path), (f'{gt_key}_path', gt_path)]))
+#     return paths
 
 
 def paired_paths_from_folder(folders, keys, filename_tmpl):
