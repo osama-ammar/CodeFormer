@@ -8,7 +8,8 @@ import scipy.ndimage
 import argparse
 import dlib
 from basicsr.utils.download_util import load_file_from_url
-
+from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor
 # --- Setup ---
 shape_predictor_url = 'https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/shape_predictor_68_face_landmarks-fbdc2cb8.dat'
 ckpt_path = load_file_from_url(url=shape_predictor_url, model_dir='weights/dlib', progress=True)
@@ -50,9 +51,93 @@ def get_smart_name(path, idx):
     # Fallback
     return f"sample_{idx}_{full_filename}.png"
 
+
+def ava256_linear2srgb(img, dim):
+    """
+    Parameters
+    ----------
+        img: Image in linear sRGB space. Values should be in [0, 1]
+        dim: Which dimension the color channel is
+
+    Returns
+    -------
+        image in non-linear sRGB space with white balancing and gamma correction applied
+    """
+
+    if dim == -1:
+        dim = len(img.shape) - 1
+    # print(f"ava256_linear2srgb input shape: {img.shape}")
+    assert img.shape[dim] == 3
+
+    is_numpy = isinstance(img, np.ndarray)
+
+    shape = [3 if i == dim else 1 for i in range(len(img.shape))]
+    
+    scale = 1.0 / 1.1059
+    
+    gamma = 1.5254
+    black = [4.4 / 255, 3.1 / 255, 4.2 / 255]
+    color_scale = [1.279545, 1.1059, 1.6]
+
+    # color_scale = [1.05, 1.0, 1.1]   # reduced
+    # black = [2/255, 2/255, 2/255]    # smaller shift
+    # gamma = 1.9                      # closer to sRGB
+
+    if is_numpy:
+        color_scale = np.array(color_scale, dtype=np.float32).reshape(shape)
+        black = np.array(black, dtype=np.float32).reshape(shape)
+    else:
+        return
+
+    img = (img * (color_scale * (scale / (1 - black))) - (black * (scale / (1 - black))))
+
+    # img = img * color_scale
+    # img = (scale / (1 - black)) * (img - black)
+
+    if is_numpy:
+        return np.clip(np.power(np.clip(img, a_min=1e-6, a_max=None), 1.0 / gamma), a_min=0.0, a_max=1.0)
+    else:
+        return 
+
+def _resolve_mask_path(target_path):
+    """ Finds the matching mask for the GT image """
+    target_path = target_path.replace('\\', '/')
+    if target_path.endswith(".avif"):
+        mask_path = target_path.replace("images", "masks").replace(".avif", ".png")
+    else:
+        mask_path = target_path.replace("images-2fps", "masks")
+    
+    if not os.path.exists(mask_path):
+        mask_path = mask_path.replace(".jpg", ".png")
+    return mask_path
+
+def apply_mask(img, mask_path):
+    """ Multiplies the image by the mask to remove background """
+    if os.path.exists(mask_path):
+        mask = PIL.Image.open(mask_path).convert('L') # Convert to Grayscale
+        # Resize mask to match image if they differ
+        if mask.size != img.size:
+            mask = mask.resize(img.size, PIL.Image.Resampling.LANCZOS)
+        
+
+        white_bg = PIL.Image.new("RGB", img.size, (255, 255, 255))
+        # Paste the face onto the black background using the mask
+        white_bg.paste(img, (0, 0), mask)
+        return white_bg
+    return img
+
 def get_landmark(filepath, only_keep_largest=True):
     detector = dlib.get_frontal_face_detector()
-    img = dlib.load_rgb_image(filepath)
+    
+    # --- FIX: Use Pillow + Numpy instead of dlib.load_rgb_image ---
+    try:
+        # This handles .avif, .jpg, and .png correctly
+        with PIL.Image.open(filepath) as temp_img:
+            img = np.array(temp_img.convert('RGB'))
+    except Exception as e:
+        print(f"\tError loading {filepath}: {e}")
+        return None
+
     dets = detector(img, 1)
     if len(dets) == 0: return None
 
@@ -65,7 +150,7 @@ def get_landmark(filepath, only_keep_largest=True):
     shape = predictor(img, d)
     return np.array([[p.x, p.y] for p in shape.parts()])
 
-def align_face(filepath, out_path):
+def align_face(filepath, out_path,mask_path):
     lm = get_landmark(filepath)
     if lm is None:
         print(f'\tNo landmark found for {filepath}')
@@ -100,9 +185,17 @@ def align_face(filepath, out_path):
     quad = np.stack([c - x - y, c - x + y, c + x + y, c + x - y])
     qsize = np.hypot(*x) * 2
 
-    # read image
-    img = PIL.Image.open(filepath)
+    img = PIL.Image.open(filepath).convert('RGB')
+    
+    # 2. Apply AVA Color Correction if it's an AVIF
+    if filepath.lower().endswith('.avif'):
+        img_np = np.array(img).astype(np.float32) / 255.0  # Normalize to [0, 1]
+        img_np = ava256_linear2srgb(img_np,dim=2)                   # Correct Colors
+        img = PIL.Image.fromarray((img_np * 255).astype(np.uint8))
 
+    # 3. Apply Mask
+    if mask_path:
+        img = apply_mask(img, mask_path)
     output_size = 512
     transform_size = 4096
     enable_padding = False
@@ -112,7 +205,7 @@ def align_face(filepath, out_path):
     if shrink > 1:
         rsize = (int(np.rint(float(img.size[0]) / shrink)),
                  int(np.rint(float(img.size[1]) / shrink)))
-        img = img.resize(rsize, PIL.Image.LANCZOS)
+        img = img.resize(rsize, PIL.Image.Resampling.LANCZOS)
         quad /= shrink
         qsize /= shrink
  
@@ -156,10 +249,10 @@ def align_face(filepath, out_path):
         quad += pad[:2]
 
     img = img.transform((transform_size, transform_size), PIL.Image.QUAD,
-                        (quad + 0.5).flatten(), PIL.Image.BILINEAR)
+                        (quad + 0.5).flatten(), PIL.Image.Resampling.BILINEAR)
 
     if output_size < transform_size:
-        img = img.resize((output_size, output_size), PIL.Image.LANCZOS)
+        img = img.resize((output_size, output_size), PIL.Image.Resampling.LANCZOS)
 
     # Save aligned image.
     # print('saveing: ', out_path)
@@ -167,49 +260,60 @@ def align_face(filepath, out_path):
 
     return img, np.max(quad[:, 0]) - np.min(quad[:, 0])
 
+def process_single_sample(args_tuple):
+    # Unpack the arguments
+    idx, content, gt_folder, lq_folder, skip_log_path = args_tuple
+    
+    lq_src = content['image']
+    gt_src = content['target_image']
+    mask_src = _resolve_mask_path(gt_src)
+    file_name = get_smart_name(gt_src, idx)
+    
+    # 1. Align GT
+    if not align_face(gt_src, os.path.join(gt_folder, file_name), mask_path=mask_src):
+        return False, gt_src # Failed
+        
+    # 2. Align LQ
+    align_face(lq_src, os.path.join(lq_folder, file_name), mask_path=mask_src)
+    return True, None # Success
+
 def process_json_data(json_path, out_dir):
     lq_folder = os.path.join(out_dir, 'lq')
     gt_folder = os.path.join(out_dir, 'gt')
     os.makedirs(lq_folder, exist_ok=True)
     os.makedirs(gt_folder, exist_ok=True)
     
-    # Path for the skip log
     skip_log_path = os.path.join(out_dir, 'skipped_images.txt')
-
     with open(json_path, 'r') as f:
-        data = json.load(f)
-    
-    samples = data.get('train', {})
-    total = len(samples)
+            samples = json.load(f).get('train', {})
+
+    # Prepare arguments for multiprocessing
+    tasks = [(idx, content, gt_folder, lq_folder, skip_log_path) 
+            for idx, content in samples.items()]
+
     skipped_count = 0
+    
+    # Use ProcessPoolExecutor for speed
+    # 'max_workers' defaults to your CPU core count
+    with ProcessPoolExecutor() as executor:
+        # tqdm creates the progress bar
+        results = list(tqdm(executor.map(process_single_sample, tasks), 
+                        total=len(tasks), 
+                        desc="Processing Images"))
 
-    # Open the log file in 'w' (write) mode to start fresh
-    with open(skip_log_path, 'w') as skip_log:
-        for idx, content in samples.items():
-            lq_src = content['image']
-            gt_src = content['target_image']
-            file_name = get_smart_name(gt_src, idx)
-            
-            print(f"[{int(idx)+1}/{total}] Processing: {file_name}")
-            
-            # Try to align GT first (if we can't find the face in GT, we skip both)
-            result = align_face(gt_src, os.path.join(gt_folder, file_name))
-            
-            if result is None:
-                print(f"  (!) Skipping: No face in {gt_src}")
-                skip_log.write(f"Index {idx}: {gt_src}\n")
+    # Count skips and write to log
+    with open(skip_log_path, 'w') as log:
+        for success, path in results:
+            if not success:
                 skipped_count += 1
-                continue
-            
-            # If GT worked, align LQ
-            align_face(lq_src, os.path.join(lq_folder, file_name))
+                log.write(f"Skip: {path}\n")
 
-    print(f"\nDone! Processed: {total - skipped_count} | Skipped: {skipped_count}")
-    print(f"See skipped cases here: {skip_log_path}")
-
+    print(f"\nFinished! Total: {len(tasks)} | Skipped: {skipped_count}")
+    
+    
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-j', '--json_path', type=str, required=True)
+    parser.add_argument('-j', '--json_path', type=str, default='/home/osama/datasets/datasets_paths_jsons/nersemble_ava_ref_filtered.json')
     parser.add_argument('-o', '--out_dir', type=str, default='./datasets/prepared_data')
     args = parser.parse_args()
     
