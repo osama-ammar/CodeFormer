@@ -208,56 +208,69 @@ class VQGANModel(SRModel):
 
 
     def nondist_validation(self, dataloader, current_iter, tb_logger, save_img):
-        dataset_name = dataloader.dataset.opt['name']
-        with_metrics = self.opt['val'].get('metrics') is not None
-        if with_metrics:
-            self.metric_results = {metric: 0 for metric in self.opt['val']['metrics'].keys()}
-        pbar = tqdm(total=len(dataloader), unit='image')
+            import numpy as np
+            import os
+            dataset_name = dataloader.dataset.opt['name']
+            with_metrics = self.opt['val'].get('metrics') is not None
+            if with_metrics:
+                self.metric_results = {metric: 0 for metric in self.opt['val']['metrics'].keys()}
+            
+            # Limit to 10 images to save time and disk space
+            max_img_save = 10
+            pbar = tqdm(total=max_img_save, unit='image')
 
-        for idx, val_data in enumerate(dataloader):
-            img_name = osp.splitext(osp.basename(val_data['lq_path'][0]))[0]
-            self.feed_data(val_data)
-            self.test()
+            for idx, val_data in enumerate(dataloader):
+                if idx >= max_img_save:
+                    break
+                    
+                img_name = osp.splitext(osp.basename(val_data['lq_path'][0]))[0]
+                self.feed_data(val_data)
+                self.test()
 
-            visuals = self.get_current_visuals()
-            sr_img = tensor2img([visuals['result']])
-            if 'gt' in visuals:
-                gt_img = tensor2img([visuals['gt']])
-                del self.gt
+                visuals = self.get_current_visuals()
+                
+                # --- DEBUGGING PRINTS (Check your terminal/logs for these) ---
+                lq_tensor = val_data['in'].to(self.device)
+                sr_tensor = visuals['result'].to(self.device)
+                gt_tensor = visuals['gt'].to(self.device)
 
-            # tentative for out of GPU memory
-            del self.lq
-            del self.output
-            torch.cuda.empty_cache()
+                # --- CONVERSION & FIX FOR BLACK IMAGES ---
+                # We multiply by 0.5 and add 0.5 to convert from [-1, 1] range to [0, 1]
+                # .clamp(0, 1) ensures no "extra" numbers cause black pixels
+                lq_img = tensor2img([(lq_tensor.detach().cpu() * 0.5) + 0.5])
+                sr_img = tensor2img([(sr_tensor.detach().cpu() * 0.5) + 0.5])
+                gt_img = tensor2img([(gt_tensor.detach().cpu() * 0.5) + 0.5])
 
-            if save_img:
-                if self.opt['is_train']:
-                    save_img_path = osp.join(self.opt['path']['visualization'], img_name,
-                                             f'{img_name}_{current_iter}.png')
-                else:
-                    if self.opt['val']['suffix']:
-                        save_img_path = osp.join(self.opt['path']['visualization'], dataset_name,
-                                                 f'{img_name}_{self.opt["val"]["suffix"]}.png')
-                    else:
-                        save_img_path = osp.join(self.opt['path']['visualization'], dataset_name,
-                                                 f'{img_name}_{self.opt["name"]}.png')
-                imwrite(sr_img, save_img_path)
+                # --- CREATE SIDE-BY-SIDE COMPARISON ---
+                # Stacks images: [Input | Result | Goal]
+                comparison_img = np.concatenate((lq_img, gt_img,sr_img), axis=1)
+
+                # Cleanup for GPU memory
+                if hasattr(self, 'lq'): del self.lq
+                del self.output
+                torch.cuda.empty_cache()
+
+                if save_img:
+                    save_dir = osp.join(self.opt['path']['visualization'], img_name)
+                    os.makedirs(save_dir, exist_ok=True)
+                    
+                    save_img_path = osp.join(save_dir, f'{img_name}_{current_iter}_comp.png')
+                    imwrite(comparison_img, save_img_path)
+
+                if with_metrics:
+                    for name, opt_ in self.opt['val']['metrics'].items():
+                        metric_data = dict(img1=sr_img, img2=gt_img)
+                        self.metric_results[name] += calculate_metric(metric_data, opt_)
+                
+                pbar.update(1)
+                pbar.set_description(f'Test {img_name}')
+                
+            pbar.close()
 
             if with_metrics:
-                # calculate metrics
-                for name, opt_ in self.opt['val']['metrics'].items():
-                    metric_data = dict(img1=sr_img, img2=gt_img)
-                    self.metric_results[name] += calculate_metric(metric_data, opt_)
-            pbar.update(1)
-            pbar.set_description(f'Test {img_name}')
-        pbar.close()
-
-        if with_metrics:
-            for metric in self.metric_results.keys():
-                self.metric_results[metric] /= (idx + 1)
-
-            self._log_validation_metric_values(current_iter, dataset_name, tb_logger)
-
+                for metric in self.metric_results.keys():
+                    self.metric_results[metric] /= (idx + 1)
+                self._log_validation_metric_values(current_iter, dataset_name, tb_logger)
 
     def _log_validation_metric_values(self, current_iter, dataset_name, tb_logger):
         log_str = f'Validation {dataset_name}\n'

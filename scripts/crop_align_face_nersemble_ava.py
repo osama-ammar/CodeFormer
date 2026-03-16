@@ -269,12 +269,12 @@ def process_single_sample(args_tuple):
     mask_src = _resolve_mask_path(gt_src)
     file_name = get_smart_name(gt_src, idx)
     
-    # 1. Align GT
-    if not align_face(gt_src, os.path.join(gt_folder, file_name), mask_path=mask_src):
-        return False, gt_src # Failed
+    # 1. Align LQ
+    if not align_face(lq_src, os.path.join(lq_folder, file_name), mask_path=mask_src):
+        return False, lq_src # Failed
         
-    # 2. Align LQ
-    align_face(lq_src, os.path.join(lq_folder, file_name), mask_path=mask_src)
+    # 2. Align GT
+    align_face(gt_src, os.path.join(gt_folder, file_name), mask_path=mask_src)
     return True, None # Success
 
 def process_json_data(json_path, out_dir):
@@ -285,7 +285,7 @@ def process_json_data(json_path, out_dir):
     
     skip_log_path = os.path.join(out_dir, 'skipped_images.txt')
     with open(json_path, 'r') as f:
-            samples = json.load(f).get('train', {})
+            samples = json.load(f).get('test', {})
 
     # Prepare arguments for multiprocessing
     tasks = [(idx, content, gt_folder, lq_folder, skip_log_path) 
@@ -314,7 +314,7 @@ def process_json_data(json_path, out_dir):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-j', '--json_path', type=str, default='/home/osama/datasets/datasets_paths_jsons/nersemble_ava_ref_filtered.json')
-    parser.add_argument('-o', '--out_dir', type=str, default='./datasets/prepared_data')
+    parser.add_argument('-o', '--out_dir', type=str, default='/data1/hs_denoising/codeformer_dataset/codeformer_val')
     args = parser.parse_args()
     
     process_json_data(args.json_path, args.out_dir)

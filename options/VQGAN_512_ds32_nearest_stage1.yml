@@ -1,15 +1,16 @@
 # general settings
-name: VQGAN-512-ds32-nearest-stage1
+name: VQGAN_Stage1_Personalized_50
 model_type: VQGANModel
-num_gpu: 8
+num_gpu: 4 # Matches your Stage 2 setup
 manual_seed: 0
 
 # dataset and data loader settings
 datasets:
   train:
-    name: FFHQ
-    type: FFHQBlindDataset
-    dataroot_gt: datasets/ffhq/ffhq_512
+    name: My_GT_Data
+    type: FFHQBlindDataset 
+    # Use the same GT path from your Stage 2 config
+    dataroot_gt: /data1/hs_denoising/codeformer_dataset/codeformer_val/gt_overfit
     filename_tmpl: '{}'
     io_backend:
       type: disk
@@ -19,26 +20,23 @@ datasets:
     mean: [0.5, 0.5, 0.5]
     std: [0.5, 0.5, 0.5]
     use_hflip: true
-    use_corrupt: false # for VQGAN
+    use_corrupt: false # Stage 1 must only see clean images
 
     # data loader
     num_worker_per_gpu: 2
-    batch_size_per_gpu: 4
-    dataset_enlarge_ratio: 100
+    batch_size_per_gpu: 2 
+    dataset_enlarge_ratio: 20 # Enlarge because we only have 50 images
 
-    prefetch_mode: cpu
-    num_prefetch_queue: 4
-
-  # val:
-  #   name: CelebA-HQ-512
-  #   type: PairedImageDataset
-  #   dataroot_lq: datasets/faces/validation/gt
-  #   dataroot_gt: datasets/faces/validation/gt
-  #   io_backend:
-  #     type: disk
-  #   mean: [0.5, 0.5, 0.5]
-  #   std: [0.5, 0.5, 0.5]
-  #   scale: 1
+  val: # Re-enabled for you to see progress
+    name: My_GT_Val
+    type: PairedImageDataset
+    dataroot_gt: /data1/hs_denoising/codeformer_dataset/codeformer_val/gt_overfit
+    dataroot_lq: /data1/hs_denoising/codeformer_dataset/codeformer_val/gt_overfit
+    io_backend:
+      type: disk
+    mean: [0.5, 0.5, 0.5]
+    std: [0.5, 0.5, 0.5]
+    scale: 1
     
 # network structures
 network_g:
@@ -56,40 +54,40 @@ network_d:
 
 # path
 path:
-  pretrain_network_g: ~
+  # Load the official VQGAN as the starting point
+  pretrain_network_g: ~ #./experiments/pretrained_models/vqgan_code1024.pth
   param_key_g: params_ema
   strict_load_g: true
   pretrain_network_d: ~
-  strict_load_d: true
   resume_state: ~
 
-# base_lr(4.5e-6)*bach_size(4)
+# Training settings adjusted for 50 images
 train:
   optim_g:
     type: Adam
-    lr: !!float 7e-5
+    lr: !!float 1e-3 # Slower learning to protect identity
     weight_decay: 0
     betas: [0.9, 0.99]
   optim_d:
     type: Adam
-    lr: !!float 7e-5
+    lr: !!float 1e-3
     weight_decay: 0
     betas: [0.9, 0.99]
 
   scheduler:
     type: CosineAnnealingRestartLR
-    periods: [1600000]
+    periods: [10000] 
     restart_weights: [1]
-    eta_min: !!float 6e-5 # no lr reduce in official vqgan code
+    eta_min: !!float 1e-7
 
-  total_iter: 1600000
+  total_iter: 10000 # With 50 images, the "max ability" usually hits by 5k iterations
 
-  warmup_iter: -1  # no warm up
-  ema_decay: 0.995 # GFPGAN: 0.5**(32 / (10 * 1000) == 0.998; Unleashing: 0.995
+  warmup_iter: -1 
+  ema_decay: 0.995 
 
   pixel_opt:
     type: L1Loss
-    loss_weight: 1.0
+    loss_weight: 1.0 # High weight to keep pixel-perfect identity
     reduction: mean
 
   perceptual_opt:
@@ -101,20 +99,20 @@ train:
   gan_opt:
     type: GANLoss
     gan_type: hinge
-    loss_weight: !!float 1.0 # adaptive_weighting
+    loss_weight: !!float 0.0 # Keep this low so the model doesn't hallucinate new details
 
   net_g_start_iter: 0
   net_d_iters: 1
-  net_d_start_iter: 30001
+  net_d_start_iter: 1000 # Start the "Critic" early
   manual_seed: 0
 
 # validation settings
 val:
-  val_freq: !!float 5e10 # no validation
+  val_freq: 1000
   save_img: true
 
   metrics:
-    psnr: # metric name, can be arbitrary
+    psnr:
       type: calculate_psnr
       crop_border: 4
       test_y_channel: false
@@ -122,15 +120,5 @@ val:
 # logging settings
 logger:
   print_freq: 100
-  save_checkpoint_freq: !!float 1e4
+  save_checkpoint_freq: 1000
   use_tb_logger: true
-  wandb:
-    project: ~
-    resume_id: ~
-
-# dist training settings
-dist_params:
-  backend: nccl
-  port: 29411
-
-find_unused_parameters: true

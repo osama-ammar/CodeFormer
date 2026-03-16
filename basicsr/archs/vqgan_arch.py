@@ -370,7 +370,10 @@ class VQAutoEncoder(nn.Module):
             self.attn_resolutions
         )
 
+        print("checking if vq path model path exist")
+        model_path = "/home/osama/code_store/CodeFormer/experiments/20260310_152715_VQGAN_Stage1_Personalized_50/models/net_g_latest.pth"
         if model_path is not None:
+            print("model path exist")
             chkpt = torch.load(model_path, map_location='cpu')
             if 'params_ema' in chkpt:
                 self.load_state_dict(torch.load(model_path, map_location='cpu')['params_ema'])

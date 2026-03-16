@@ -1,67 +1,66 @@
 import argparse
 import glob
-import numpy as np
 import os
 import cv2
 import torch
 from torchvision.transforms.functional import normalize
-from basicsr.utils import imwrite, img2tensor, tensor2img
-
+from basicsr.utils import img2tensor
 from basicsr.utils.registry import ARCH_REGISTRY
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-i', '--test_path', type=str, default='datasets/ffhq/ffhq_512')
-    parser.add_argument('-o', '--save_root', type=str, default='./experiments/pretrained_models/vqgan')
+    parser.add_argument('-i', '--test_path', type=str, default='/data1/hs_denoising/codeformer_dataset/codeformer_val/gt_overfit')
+    parser.add_argument('-o', '--save_root', type=str, default='../experiments/my_identity_codes')
     parser.add_argument('--codebook_size', type=int, default=1024)
-    parser.add_argument('--ckpt_path', type=str, default='./experiments/pretrained_models/vqgan/net_g.pth')
+    parser.add_argument('--ckpt_path', type=str, default='../experiments/20260310_152715_VQGAN_Stage1_Personalized_50/models/net_g_latest.pth')
     args = parser.parse_args()
 
-    if args.save_root.endswith('/'):  # solve when path ends with /
-        args.save_root = args.save_root[:-1]
-    dir_name = os.path.abspath(args.save_root)
-    os.makedirs(dir_name, exist_ok=True)
-
+    os.makedirs(args.save_root, exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    test_path = args.test_path
-    save_root = args.save_root
-    ckpt_path = args.ckpt_path
-    codebook_size = args.codebook_size
 
-    vqgan = ARCH_REGISTRY.get('VQAutoEncoder')(512, 64, [1, 2, 2, 4, 4, 8], 'nearest',
-                                                codebook_size=codebook_size).to(device)
-    checkpoint = torch.load(ckpt_path)['params_ema']
-
+    # Initialize VQGAN
+    vqgan = ARCH_REGISTRY.get('VQAutoEncoder')(
+        img_size=512, nf=64, ch_mult=[1, 2, 2, 4, 4, 8], 
+        quantizer='nearest', codebook_size=args.codebook_size
+    ).to(device)
+    
+    checkpoint = torch.load(args.ckpt_path, map_location=device)['params_ema']
     vqgan.load_state_dict(checkpoint)
     vqgan.eval()
 
-    sum_latent = np.zeros((codebook_size)).astype('float64')
-    size_latent = 16
-    latent = {}
-    latent['orig'] = {}
-    latent['hflip'] = {}
-    for i in ['orig', 'hflip']:
-    # for i in ['hflip']:
-        for img_path in sorted(glob.glob(os.path.join(test_path, '*.[jp][pn]g'))):
-            img_name = os.path.basename(img_path)
-            img = cv2.imread(img_path)
-            if i == 'hflip':
-                cv2.flip(img, 1, img)
+    # Create the nested structure required by FFHQBlindDataset
+    latent_map = {'orig': {}, 'hflip': {}}
+    
+    img_list = sorted(glob.glob(os.path.join(args.test_path, '*.[jp][pn]g')))
+    print(f"Found {len(img_list)} images. Generating codes for original and flipped versions...")
+
+    for img_path in img_list:
+        img_name = os.path.splitext(os.path.basename(img_path))[0]
+        raw_img = cv2.imread(img_path)
+        
+        # We process both the original image and the horizontally flipped version
+        for mode in ['orig', 'hflip']:
+            img = raw_img.copy()
+            if mode == 'hflip':
+                img = cv2.flip(img, 1)
+            
+            # Preprocessing
             img = img2tensor(img / 255., bgr2rgb=True, float32=True)
             normalize(img, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True)
             img = img.unsqueeze(0).to(device)
+
             with torch.no_grad():
-                # output = net(img)[0]
-                x, feat_dict = vqgan.encoder(img, True)
-                x, _, log = vqgan.quantize(x)
-            # del output
-            torch.cuda.empty_cache()
+                # Extract indices from your Stage 1 VQGAN
+                x = vqgan.encoder(img)
+                _, _, log = vqgan.quantize(x)
+                
+                # Save as LongTensor (cpu) for compatibility with CrossEntropyLoss
+                indices = log['min_encoding_indices'].squeeze().cpu()
+                latent_map[mode][img_name] = indices
 
-            min_encoding_indices = log['min_encoding_indices']
-            min_encoding_indices = min_encoding_indices.view(size_latent,size_latent)
-            latent[i][img_name[:-4]] = min_encoding_indices.cpu().numpy()
-            print(img_name, latent[i][img_name[:-4]].shape)
+        print(f"Processed: {img_name}")
 
-    latent_save_path = os.path.join(save_root, f'latent_gt_code{codebook_size}.pth')
-    torch.save(latent, latent_save_path)
-    print(f'\nLatent GT code are saved in {save_root}')
+    # Save the nested dictionary
+    save_path = os.path.join(args.save_root, f'latent_gt_code{args.codebook_size}.pth')
+    torch.save(latent_map, save_path)
+    print(f'\nSuccess! Latent GT codes saved to: {save_path}')
